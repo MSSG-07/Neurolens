@@ -1,0 +1,25 @@
+data_root: data/BraTS2023_GLI
+output_dir: runs/neurolens
+modalities: [t1n, t1c, t2w, t2f]
+patch_size: [64, 64, 64]
+slice_axis: 2
+batch_size: 2
+num_workers: 2
+accumulation_steps: 4
+epochs: 50
+learning_rate: 0.0001
+weight_decay: 0.00001
+projection_dim: 256
+num_classes: 4
+classification_classes: 2
+base_channels: 8
+temperature: 0.1
+lambda_classification: 1.0
+lambda_segmentation: 1.0
+lambda_contrastive: 0.1
+lambda_consistency: 0.05
+alignment_condition: C
+seed: 42
+val_fraction: 0.2
+mixed_precision: true
+device: cuda

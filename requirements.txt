@@ -1,0 +1,8 @@
+# Install into the target environment after checking its existing PyTorch/CUDA stack.
+# PyTorch and NumPy intentionally omitted: preserve the Colab/runtime versions.
+nibabel>=5.2
+PyYAML>=6.0
+scikit-learn>=1.4
+matplotlib>=3.8
+Pillow>=10.0
+scipy>=1.12
