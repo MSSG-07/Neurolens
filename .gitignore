@@ -1,0 +1,33 @@
+# Dataset payloads: keep all MRI data out of source control.
+/data/
+/raw/
+/datasets/
+*.nii
+*.nii.gz
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.zarr/
+
+# Training outputs and checkpoints.
+/runs/
+/checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Local configuration and credentials.
+.env
+.env.*
+!.env.example
+*credentials*.json
+*service-account*.json
+secrets.toml
+
+# Python artifacts.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/

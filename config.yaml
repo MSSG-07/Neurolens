@@ -1,4 +1,10 @@
-data_root: data/BraTS2023_GLI
+data_root: ""
+brats_root: ""
+brisc_root: ""
+manifest_train: ""
+manifest_val: ""
+manifest_test: ""
+manifest_id_column: patient_id
 output_dir: runs/neurolens
 modalities: [t1n, t1c, t2w, t2f]
 patch_size: [64, 64, 64]
@@ -20,6 +26,5 @@ lambda_contrastive: 0.1
 lambda_consistency: 0.05
 alignment_condition: C
 seed: 42
-val_fraction: 0.2
 mixed_precision: true
 device: cuda

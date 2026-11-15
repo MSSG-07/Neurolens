@@ -22,19 +22,6 @@ def convert_brats_labels(labels: np.ndarray) -> np.ndarray:
     return out
 
 
-def split_patients(patient_ids: Sequence[str], val_fraction: float = .2, seed: int = 42):
-    """Deterministic patient-level split; each patient appears in exactly one side."""
-    if not 0 < val_fraction < 1:
-        raise ValueError("val_fraction must be between zero and one")
-    ids = sorted(set(patient_ids))
-    if len(ids) < 2:
-        raise ValueError("At least two distinct patients are required for a split")
-    rng = np.random.default_rng(seed)
-    rng.shuffle(ids)
-    n_val = min(len(ids) - 1, max(1, round(len(ids) * val_fraction)))
-    return ids[n_val:], ids[:n_val]
-
-
 def discover_patients(root: str, modalities: Sequence[str]):
     """Discover case directories that contain every modality and segmentation."""
     root_path = Path(root)
@@ -49,6 +36,18 @@ def discover_patients(root: str, modalities: Sequence[str]):
     if not cases:
         raise RuntimeError(f"No complete BraTS cases found under {root_path}; expected modality suffixes {modalities}")
     return cases
+
+
+def cases_from_manifest(cases, patient_ids: Sequence[str], split_name: str):
+    """Select complete cases in exact manifest order; never create or rewrite a split."""
+    by_id = {case[0]: case for case in cases}
+    missing = [patient_id for patient_id in patient_ids if patient_id not in by_id]
+    if missing:
+        raise FileNotFoundError(
+            f"{split_name} manifest references {len(missing)} cases absent from the complete dataset; "
+            f"examples: {missing[:5]}"
+        )
+    return [by_id[patient_id] for patient_id in patient_ids]
 
 
 class BraTSPairedDataset(Dataset):

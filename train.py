@@ -14,7 +14,7 @@ def main():
     parser.add_argument("--condition",choices=("A","B","C"))
     parser.add_argument("--output-dir")
     args=parser.parse_args(); cfg=load_config(args.config)
-    if args.data_root: cfg.data_root=args.data_root
+    if args.data_root: cfg.data_root=cfg.brats_root=args.data_root
     if args.condition: cfg.alignment_condition=args.condition
     if args.output_dir: cfg.output_dir=args.output_dir
     cfg.validate(); seed_everything(cfg.seed)
