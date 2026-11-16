@@ -79,7 +79,10 @@ class Trainer:
             # ROC-AUC is calculated in final evaluation where undefined values
             # can be reported explicitly; epoch rows contain finite core metrics.
             classification = classification_metrics(metric_truth, metric_prediction)
-            result.update({f"classification_{key}": value for key, value in classification.items()})
+            # Keep epoch metrics scalar so CSV logging remains well-defined;
+            # per-class reports/confusion matrices are emitted in final evaluation.
+            result.update({f"classification_{key}": value for key, value in classification.items()
+                           if np.isscalar(value)})
             result["segmentation_dice"] = float(np.mean(patient_dice)) if patient_dice else float("nan")
             result["segmentation_iou"] = float(np.mean(patient_iou)) if patient_iou else float("nan")
         return result
