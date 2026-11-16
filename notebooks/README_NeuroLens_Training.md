@@ -1,57 +1,70 @@
-# NeuroLens Complete Training Pipeline Notebook
+# NeuroLens Three-Condition Colab Study
 
-Notebook: [`NeuroLens_Complete_Training_Pipeline.ipynb`](NeuroLens_Complete_Training_Pipeline.ipynb)
+Primary notebook: [`NeuroLens_Complete_Training_Pipeline.ipynb`](NeuroLens_Complete_Training_Pipeline.ipynb)
 
-This Colab notebook documents and runs the repository's existing NeuroLens pipeline for a controlled BraTS Condition A baseline. It includes Drive setup, source inspection, read-only BRISC and BraTS audits, saved-split leakage checks, preprocessing visualization, real DataLoader inspection, the existing architecture and losses, opt-in training with resumable Drive checkpoints, held-out test evaluation, qualitative outputs, and a generated experiment report.
+This notebook runs the repository's existing NeuroLens architecture through the planned BraTS A/B/C ablation study. It keeps BRISC as an independent 2D dataset audit and does not create BRISC-to-BraTS pairs.
 
-## Execution order
+## Run in Colab
 
-1. Open the notebook in Google Colab and select a GPU runtime (T4 or better recommended). Setup, source inspection, manifest checks, and visual inspection can run without starting training; dataset decoding requires the project dependencies and mounted Drive data.
-2. Run setup and data-audit cells from the top. The notebook uses the saved BraTS manifests at `MyDrive/NeuroLens/manifests/{train,validation,test}.csv` and does not regenerate them.
-3. Review the split, sample, preprocessing, and model/loss descriptions.
-4. Training is disabled by default. Set `START_TRAINING = True` in the dedicated Condition A cell and execute that cell explicitly when ready. The output directory is `MyDrive/NeuroLens/runs/baseline_A`.
-5. For recovery, set `RESUME = True` and execute the same training cell. It restores `latest.pt`, optimizer/scaler state, history, best validation loss, and Python/NumPy/CUDA RNG state when available.
-6. After training/model selection, set `RUN_FINAL_EVALUATION = True` in the evaluation cell and execute it. It evaluates the best-validation checkpoint on the saved test manifest and writes metrics and per-case `.npz` prediction artifacts.
+1. Upload/open `NeuroLens_Complete_Training_Pipeline.ipynb` in Colab.
+2. Select a CUDA GPU runtime and use Runtime → Run all.
+3. Approve the Google Drive mount prompt.
+4. The notebook verifies the repository, dataset paths, saved split counts, and disjoint patient IDs. It then runs Conditions A, B, and C sequentially through the single `RUN_ALL_CONDITIONS = True` control.
 
-## Data and compute
+The master cell refuses to train without CUDA. Training is 50 epochs per condition (150 total) with batch size 2, accumulation 4, AdamW at 1e-4 and weight decay 1e-5, mixed precision, and seed 42. It does not add a scheduler, early stopping, gradient clipping, or architecture changes. No one-session runtime guarantee is made; the run is designed to continue across Colab disconnects. After reconnecting, run the notebook from the top again; completed epochs, conditions, validations, and test reports are detected and skipped.
 
-The expected Drive roots are:
+## Required Drive data
 
-- BraTS 2023 GLI: `MyDrive/NeuroLens/data/raw/BraTS2023/ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData`
-- BRISC 2025: `MyDrive/NeuroLens/data/raw/BRISC2025/brisc2025`
+- BraTS: `MyDrive/NeuroLens/data/raw/BraTS2023/ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData`
+- BRISC: `MyDrive/NeuroLens/data/raw/BRISC2025/brisc2025`
+- Saved manifests: `MyDrive/NeuroLens/manifests/train.csv`, `validation.csv`, and `test.csv`
 
-The notebook checks these paths and stops with a clear message if they are absent. BRISC folder variants with `(1)` are resolved by the repository's `BRISCPathResolver`. BRISC remains independent 2D data; it is not used to construct cross-dimensional positives. NeuroLens's current model and loss consume same-patient BraTS 2D/3D pairs.
+The notebook never regenerates the saved splits. Validation and test use a deterministic slice: the middle entry of the sorted valid-slice indices for each patient. Training retains random valid-slice sampling. This makes the same validation/test patient view apply to A, B, and C while preserving same-patient slice/volume correspondence.
 
-The checked-in `config.yaml` has empty dataset-root and manifest fields. The notebook explicitly fills the existing `Config` object's `brats_root`, `data_root`, and saved manifest fields after verifying the Drive files; it does not edit `config.yaml` or regenerate manifests. When training starts, that resolved runtime configuration is recorded as `config.json` and `runtime_config.yaml` in the experiment directory.
+## Conditions
 
-The checked-in config defaults to batch size 2, 64-cubed patches, 50 epochs, AdamW at `1e-4` with `1e-5` weight decay, and mixed precision when CUDA is available. Four-channel 3D volumes are memory intensive; the notebook refuses to start training without CUDA by default. Lowering batch size or patch size changes the baseline and should be recorded as a separate experiment. Gradient accumulation is configured to 4 steps.
+| Condition | Classification | Segmentation | Contrastive | Consistency |
+|---|---:|---:|---:|---:|
+| A | 1.0 | 1.0 | 0.0 | 0.0 |
+| B | 1.0 | 1.0 | 0.1 | 0.0 |
+| C | 1.0 | 1.0 | 0.1 | 0.05 |
 
-## Output layout
+Each condition resets the same seed and initializes a fresh model, AdamW optimizer, scaler, and DataLoader generator. Conditions B/C use `drop_last=True` to guarantee two distinct patients per InfoNCE batch. The test manifest remains unopened until all three best checkpoints are selected using validation total loss and final validation reports are written.
+
+## Outputs
 
 ```text
-MyDrive/NeuroLens/runs/baseline_A/
-  config.json
-  runtime_config.yaml
-  run_metadata.json
-  training.csv
-  latest.pt
-  best_validation.pt
-  training_state.pt
-  plots/
-  evaluation/results.json
-  evaluation/confusion_matrix.png
-  evaluation/per_case/*.npz
-  experiment_report.md
+MyDrive/NeuroLens/experiments/
+  experiment_status.json
+  condition_A/                  # same layout for B and C
+    latest.pt
+    best_validation.pt
+    training_state.pt           # canonical atomic recovery checkpoint
+    training.csv
+    config.json
+    runtime_config.yaml
+    run_metadata.json
+    evaluation/
+      validation_results.json
+      test_results.json
+      test_confusion_matrix.png
+      per_case/*.npz
+      qualitative/*.png
+  comparative_analysis/
+    comparison.csv
+    comparison.json
+    paired_patient_differences.json
+    comparison_plots/
+    confusion_matrices/
+    qualitative_results/
+    final_research_report.md
 ```
 
-The `.npz` files contain the model's cropped 64-cubed prediction and ground truth in the dataset's `(D,H,W)=(Z,Y,X)` orientation, plus classification values and patient ID. They are patch-space artifacts, not restored full-resolution NIfTI volumes. No source dataset or saved manifest is modified.
+Per-case predictions are saved as cropped 64³ patch-space NPZ arrays, not restored full-resolution NIfTI files. HD95 uses the existing utility's unit voxel spacing; undefined values are represented as JSON `null`. Classification precision/recall/F1 are support-weighted and computed globally over patients. Segmentation Dice/IoU are foreground class metrics macro-averaged within each patient, then averaged across patients. Empty-empty Dice/IoU is 1, consistent with the repository utility.
 
-## Method notes
+## Resume and safety
 
-- Condition A is the existing baseline: classification and segmentation losses are active; contrastive and consistency weights are set to zero by `Trainer` for condition A.
-- Classification is binary tumour presence, generated from non-background voxels in the loaded cropped segmentation. It is not BRISC's four-class tumour subtype prediction.
-- Segmentation labels follow the existing loader conversion from BraTS source `{0,1,2,4}` to contiguous `{0,1,2,3}`. The loss averages soft Dice across all four classes and adds multiclass cross entropy.
-- The model's paired 2D slice and 3D crop come from the same patient. Condition A does not optimize a contrastive term; no cross-dataset positive pairs are created.
-- The repository trainer has no scheduler, early stopping, or built-in resume/best-checkpoint selection. The notebook uses its `Trainer.run_epoch`, `save_checkpoint`, and `load_checkpoint` APIs and adds notebook-level recovery/reporting without changing repository source.
-- Test data is not loaded until the final evaluation section, after best checkpoint selection using validation loss.
+`training_state.pt` contains model, optimizer, AMP scaler, epoch, full history, best-validation state, elapsed time, configuration, Python/NumPy/Torch/CUDA RNG state, and the DataLoader generator state. Resume validates the saved config and condition metadata, then restores the next epoch. Checkpoint writes use the repository's atomic checkpoint helper. `latest.pt` and `best_validation.pt` are mirrors; missing mirrors can be repaired from canonical state when possible. Corrupt or incompatible state stops with an error instead of silently starting over. CSV history is atomically rebuilt from checkpoint history to avoid duplicate rows.
+
+The checked-in `config.yaml` has blank data paths. The notebook fills the existing Config fields from the verified Drive locations at runtime and writes the resolved per-condition configuration into each experiment folder; it does not edit `config.yaml` or saved manifests.
 

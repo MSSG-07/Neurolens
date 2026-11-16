@@ -3,11 +3,14 @@ from pathlib import Path
 import torch
 
 
-def save_checkpoint(path, model, optimizer, scaler, epoch, config):
+def save_checkpoint(path, model, optimizer, scaler, epoch, config, extra_state=None):
     path = Path(path); path.parent.mkdir(parents=True,exist_ok=True)
     tmp = path.with_suffix(path.suffix+".tmp")
-    torch.save({"model":model.state_dict(),"optimizer":optimizer.state_dict(),"scaler":scaler.state_dict(),
-                "epoch":epoch,"config":config,"torch_rng":torch.get_rng_state()},tmp)
+    checkpoint = {"model":model.state_dict(),"optimizer":optimizer.state_dict(),"scaler":scaler.state_dict(),
+                  "epoch":epoch,"config":config,"torch_rng":torch.get_rng_state()}
+    if extra_state is not None:
+        checkpoint["extra_state"] = extra_state
+    torch.save(checkpoint,tmp)
     tmp.replace(path)
 
 

@@ -1,10 +1,12 @@
 """Paired training loop with AMP and gradient accumulation."""
 from pathlib import Path
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from neurolens.losses.multitask_loss import MultiTaskLoss
 from neurolens.training.checkpoint import save_checkpoint
 from neurolens.utils.logging import CSVLogger
+from neurolens.utils.metrics import classification_metrics
 
 
 class Trainer:
@@ -20,8 +22,22 @@ class Trainer:
         self.loss=MultiTaskLoss(weights,config.temperature)
         self.logger=CSVLogger(Path(config.output_dir)/"training.csv")
 
-    def run_epoch(self, loader, training=True):
+    def run_epoch(self, loader, training=True, collect_metrics=False):
+        """Run one epoch; optionally aggregate deterministic evaluation metrics.
+
+        Metric collection is available only in evaluation mode and happens in
+        the same forward pass as validation loss, avoiding a second NIfTI load.
+        Classification scores are global across patient predictions. Segmentation
+        Dice/IoU are computed per patient (foreground classes 1..3, macro within
+        patient) and then averaged across patients. Both-empty regions score 1,
+        matching ``segmentation_metrics``; HD95 is intentionally not computed
+        per epoch because it is an expensive final-evaluation metric.
+        """
+        if collect_metrics and training:
+            raise ValueError("collect_metrics=True requires training=False")
         self.model.train(training); totals={}; n=0
+        metric_truth, metric_prediction = [], []
+        patient_dice, patient_iou = [], []
         if training: self.optimizer.zero_grad(set_to_none=True)
         for i,batch in enumerate(loader):
             image2d=batch["image2d"].to(self.device,non_blocking=True).float()
@@ -32,13 +48,41 @@ class Trainer:
             with torch.set_grad_enabled(training), torch.autocast(device_type=self.device.type,enabled=self.scaler.is_enabled()):
                 output=self.model(image2d,image3d); loss,parts=self.loss(output,targets)
                 scaled=loss/self.config.accumulation_steps
+            batch_size = int(image2d.shape[0])
+            if collect_metrics:
+                probabilities = output["classification_logits"].softmax(1).detach().cpu().numpy()
+                metric_truth.extend(targets["class_label"].detach().cpu().tolist())
+                metric_prediction.extend(probabilities.argmax(1).tolist())
+                segmentation = output["segmentation_logits"].argmax(1).detach().cpu().numpy()
+                truth = targets["segmentation"].detach().cpu().numpy()
+                for prediction, target in zip(segmentation, truth):
+                    class_dice, class_iou = [], []
+                    for class_id in (1, 2, 3):
+                        pred_mask, true_mask = prediction == class_id, target == class_id
+                        intersection = np.logical_and(pred_mask, true_mask).sum()
+                        denominator = pred_mask.sum() + true_mask.sum()
+                        union = np.logical_or(pred_mask, true_mask).sum()
+                        class_dice.append(float(2 * intersection / denominator) if denominator else 1.0)
+                        class_iou.append(float(intersection / union) if union else 1.0)
+                    patient_dice.append(float(np.mean(class_dice)))
+                    patient_iou.append(float(np.mean(class_iou)))
             if training:
                 self.scaler.scale(scaled).backward()
                 if (i+1)%self.config.accumulation_steps==0 or (i+1)==len(loader):
                     self.scaler.step(self.optimizer); self.scaler.update(); self.optimizer.zero_grad(set_to_none=True)
-            for key,value in parts.items(): totals[key]=totals.get(key,0.)+float(value.detach())
-            n+=1
-        return {k:v/max(1,n) for k,v in totals.items()}
+            for key,value in parts.items(): totals[key]=totals.get(key,0.)+float(value.detach())*batch_size
+            n+=batch_size
+        result = {k:v/max(1,n) for k,v in totals.items()}
+        if collect_metrics:
+            if not metric_truth:
+                raise ValueError("Cannot collect validation metrics from an empty DataLoader")
+            # ROC-AUC is calculated in final evaluation where undefined values
+            # can be reported explicitly; epoch rows contain finite core metrics.
+            classification = classification_metrics(metric_truth, metric_prediction)
+            result.update({f"classification_{key}": value for key, value in classification.items()})
+            result["segmentation_dice"] = float(np.mean(patient_dice)) if patient_dice else float("nan")
+            result["segmentation_iou"] = float(np.mean(patient_iou)) if patient_iou else float("nan")
+        return result
 
     def fit(self, train_dataset, val_dataset):
         cfg=self.config

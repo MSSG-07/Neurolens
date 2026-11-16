@@ -3,14 +3,15 @@ from neurolens.datasets.brats import discover_patients, cases_from_manifest, Bra
 from neurolens.datasets.manifests import read_patient_ids
 
 
-def _dataset_for_manifest(config, manifest_path, split_name):
+def _dataset_for_manifest(config, manifest_path, split_name, cases=None):
     if not manifest_path:
         raise ValueError(f"Configure the saved {split_name} manifest path in config.yaml or environment")
     ids = read_patient_ids(manifest_path, config.manifest_id_column)
-    cases = discover_patients(config.brats_root or config.data_root, config.modalities)
-    selected = cases_from_manifest(cases, ids, split_name)
+    available_cases = cases if cases is not None else discover_patients(config.brats_root or config.data_root, config.modalities)
+    selected = cases_from_manifest(available_cases, ids, split_name)
     return BraTSPairedDataset(config.brats_root or config.data_root, selected, modalities=config.modalities,
-                              patch_size=config.patch_size, slice_axis=config.slice_axis)
+                              patch_size=config.patch_size, slice_axis=config.slice_axis,
+                              random_slice=(split_name == "train"))
 
 
 def validate_saved_splits(config):
@@ -31,8 +32,9 @@ def validate_saved_splits(config):
 def make_datasets(config):
     """Return the saved train and validation manifests exactly as assigned."""
     validate_saved_splits(config)
-    return (_dataset_for_manifest(config, config.manifest_train, "train"),
-            _dataset_for_manifest(config, config.manifest_val, "validation"))
+    cases = discover_patients(config.brats_root or config.data_root, config.modalities)
+    return (_dataset_for_manifest(config, config.manifest_train, "train", cases),
+            _dataset_for_manifest(config, config.manifest_val, "validation", cases))
 
 
 def make_test_dataset(config):

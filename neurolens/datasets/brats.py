@@ -50,13 +50,27 @@ def cases_from_manifest(cases, patient_ids: Sequence[str], split_name: str):
     return [by_id[patient_id] for patient_id in patient_ids]
 
 
+def _select_slice_index(valid: np.ndarray, random_slice: bool = True) -> int:
+    """Select a valid slice randomly for training or the stable middle for evaluation."""
+    valid = np.asarray(valid)
+    if valid.ndim != 1 or valid.size == 0:
+        raise ValueError("valid slice indices must be a non-empty one-dimensional array")
+    return int(np.random.choice(valid)) if random_slice else int(valid[valid.size // 2])
+
+
 class BraTSPairedDataset(Dataset):
-    """One random valid slice paired with its originating (cropped) 3D case."""
-    def __init__(self, root: str, cases=None, modalities=("t1n", "t1c", "t2w", "t2f"), patch_size=(96,96,96), slice_axis=2):
+    """One valid slice paired with its originating (cropped) 3D case.
+
+    ``random_slice=True`` preserves stochastic training slice selection. Set it
+    to false for deterministic evaluation: the middle valid slice is selected.
+    """
+    def __init__(self, root: str, cases=None, modalities=("t1n", "t1c", "t2w", "t2f"),
+                 patch_size=(96,96,96), slice_axis=2, random_slice=True):
         if nib is None:
             raise RuntimeError("BraTS loading requires nibabel (pip install nibabel)")
         self.cases = cases or discover_patients(root, modalities)
         self.modalities, self.patch_size, self.slice_axis = tuple(modalities), tuple(patch_size), slice_axis
+        self.random_slice = bool(random_slice)
         if slice_axis not in (0, 1, 2):
             raise ValueError("slice_axis must be 0, 1, or 2")
 
@@ -80,7 +94,9 @@ class BraTSPairedDataset(Dataset):
         valid = np.flatnonzero(foreground.any(axis=tuple(i for i in range(3) if i != self.slice_axis)))
         if valid.size == 0:
             valid = np.arange(self.patch_size[self.slice_axis])
-        slice_idx = int(np.random.choice(valid))
+        # ``valid`` is sorted by flatnonzero. Its middle element is a stable
+        # center-most valid slice, shared across validation and test runs.
+        slice_idx = _select_slice_index(valid, self.random_slice)
         slice_image = np.take(image, slice_idx, axis=self.slice_axis + 1)
         return {"image2d": torch.from_numpy(slice_image.copy()), "image3d": torch.from_numpy(image.copy()),
                 "segmentation": torch.from_numpy(label.astype(np.int64, copy=True)),
