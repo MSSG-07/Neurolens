@@ -16,13 +16,18 @@ def main():
     parser.add_argument("--batch-size", type=int, default=2)
     args = parser.parse_args()
     cfg = load_config(args.config)
-    validate_saved_splits(cfg)
+    split_counts = validate_saved_splits(cfg)
+    expected_split_counts = {"train": 296, "validation": 37, "test": 38}
+    if split_counts != expected_split_counts:
+        raise ValueError(f"Saved BraTS split counts changed: expected {expected_split_counts}, got {split_counts}")
     if not cfg.brats_root:
         raise ValueError("Set brats_root or NEUROLENS_BRATS_ROOT before the integration check")
     if not cfg.manifest_train:
         raise ValueError("Set manifest_train or NEUROLENS_MANIFEST_TRAIN before the integration check")
     ids = read_patient_ids(cfg.manifest_train, cfg.manifest_id_column)
     cases = discover_patients(cfg.brats_root, cfg.modalities)
+    if len(cases) != 371:
+        raise ValueError(f"Expected 371 complete BraTS cases, found {len(cases)}")
     selected = cases_from_manifest(cases, ids, "train")
     dataset = BraTSPairedDataset(cfg.brats_root, selected, cfg.modalities, cfg.patch_size, cfg.slice_axis)
     if len(dataset) < args.batch_size:
@@ -42,7 +47,8 @@ def main():
     assert output["embedding3d"].shape == (args.batch_size, cfg.projection_dim)
     assert output["segmentation_logits"].shape[0] == args.batch_size
     assert torch.isfinite(loss).item() and all(torch.isfinite(value).item() for value in terms.values())
-    print({"status": "one real BraTS batch passed", "device": str(device), "patients": batch["patient_id"],
+    print({"status": "one real BraTS batch passed", "device": str(device), "complete_cases": len(cases),
+           "split_counts": split_counts, "patients": batch["patient_id"],
            "image2d": tuple(batch["image2d"].shape), "image3d": tuple(batch["image3d"].shape),
            "segmentation": tuple(batch["segmentation"].shape), "loss_finite": True})
 

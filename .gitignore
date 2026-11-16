@@ -9,6 +9,7 @@
 *.h5
 *.hdf5
 *.zarr/
+*.log
 
 # Training outputs and checkpoints.
 /runs/

@@ -142,7 +142,20 @@ class ResolvePathTests(unittest.TestCase):
         linked, resolver_value = _resolve_linked_image("example.jpg", mask, "train", resolver, index, True)
         self.assertEqual(linked, image)
         self.assertEqual(resolver_value, "segmentation_task/train/images/example.jpg")
+        self.assertEqual(resolver.last_call["value"], "segmentation_task/train/images/example.jpg")
+        self.assertEqual(resolver.last_call["type"], "str")
         self.assertTrue(("train", "segmentation", "example.jpg") in index)
+
+    def test_linked_basename_with_multiple_manifest_matches_is_ambiguous(self):
+        mask = self.put("segmentation_task/train/masks/example.png")
+        first = self.put("segmentation_task/train/images/glioma/example.jpg")
+        second = self.put("segmentation_task/train/images/meningioma/example.jpg")
+        resolver = BRISCPathResolver(self.root)
+        with self.assertRaisesRegex(RuntimeError, "Ambiguous linked_image basename"):
+            _resolve_linked_image("example.jpg", mask, "train", resolver,
+                                  {("train", "segmentation", "example.jpg"): {
+                                      str(first): first, str(second): second
+                                  }})
 
     def test_windows_linked_image_path_uses_same_resolver(self):
         expected = self.put("segmentation_task (1)/train/images/example.jpg")

@@ -26,7 +26,7 @@ Inspect the Drive files before choosing BRISC preprocessing:
 python inspect_datasets.py --brats-root "$NEUROLENS_BRATS_ROOT" --brisc-root "$NEUROLENS_BRISC_ROOT" --train-manifest "$NEUROLENS_MANIFEST_TRAIN" --val-manifest "$NEUROLENS_MANIFEST_VAL" --test-manifest "$NEUROLENS_MANIFEST_TEST"
 ```
 
-The inspector prints BRISC README and manifest metadata, validates listed SHA256 files when present, and samples the directory tree without applying image preprocessing. The BRISC loader is gated and raises an error until its task labels and file organization are confirmed.
+The inspector prints BRISC README and manifest metadata, validates listed SHA256 files when present, and samples the directory tree without applying image preprocessing. The BRISC loader reads `relative_path` first and falls back to `filename`, resolves the two task-folder variants without recursive scans, and checks linked image-mask pairs from the same manifest.
 
 ## BraTS 2023 GLI layout
 
@@ -46,7 +46,7 @@ Set `brats_root` and `modalities` in `config.yaml` if names differ. The loader r
 
 Patient assignments are loaded from the saved manifests, preserving their order. A manifest patient without a complete case raises an error instead of being silently dropped. Each dataset index represents one patient and samples a slice on access. Batch size must be at least two for aligned conditions B/C so InfoNCE has valid negatives; use `drop_last` behavior configured by the trainer. Small GPU batches and accumulation are recommended for a Colab T4. If memory is insufficient, reduce patch dimensions and/or base channels.
 
-BRISC uses its `manifest.csv` as the source of truth. `BRISCDataset` loads `tumor_label` classification records or `is_mask`/`linked_image` segmentation pairs and requires an explicit manifest split. Keep BRISC loaders separate from BraTS: they do not create cross-dimensional positive pairs. Audit and load a small integration pass with `python brisc_integration_test.py --root /path/to/brisc2025 [--manifest /path/to/manifest.csv]`. The audit reports missing paths, image-mask shape/split/label mismatches, duplicate decoded image content, and image overlap between the two tasks. It never starts model training.
+BRISC uses its `manifest.csv` as the source of truth. `BRISCDataset` loads the named tumor classes or `is_mask`/`linked_image` segmentation pairs and requires an explicit official split. Keep BRISC loaders separate from BraTS: they do not create cross-dimensional positive pairs. Audit and load real batches with `python brisc_integration_test.py --root "$NEUROLENS_BRISC_ROOT"`. The audit reports unresolved and ambiguous paths, corrupt files, pair mismatches, labels, split counts, duplicate content, checksums, and task overlap. It never starts model training. BRISC grayscale images and four-category labels are task-specific inputs; the existing NeuroLens model is configured for four-channel BraTS images and binary classification, so BRISC is not sent through that model without a separately designed task head.
 
 ## Run
 
