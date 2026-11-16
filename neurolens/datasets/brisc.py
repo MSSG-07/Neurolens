@@ -21,53 +21,27 @@ def _truth(value: str) -> bool:
 
 
 def _resolve_path(root: Path, value: str) -> Path:
-    """Resolve manifest paths, including Windows separators, without escaping root."""
-    raw = str(value).strip().replace("\\", "/")
-    candidate = Path(raw)
-    if candidate.is_absolute():
-        # Absolute Windows paths are unusable on Linux; retain only their relative tail.
-        if candidate.exists():
-            resolved = candidate.resolve()
-            return resolved
-        raw = raw.lstrip("/")
-        if len(raw) > 1 and raw[1] == ":":
-            raw = raw[2:].lstrip("/")
-    parts = [part for part in raw.split("/") if part not in ("", ".")]
-    if any(part == ".." for part in parts):
-        raise ValueError(f"Manifest path escapes BRISC root: {value!r}")
-    root = root.resolve()
-    # Manifests are seen with paths rooted at either the task folder or a duplicated
-    # brisc2025/BRISC2025 folder. Try the listed path first, then strip known roots.
-    variants = [parts]
-    lowered = [part.casefold() for part in parts]
-    for marker in ("brisc2025", "brisc", "dataset"):
-        if marker in lowered:
-            variants.append(parts[lowered.index(marker) + 1:])
-    for variant in variants:
-        path = root.joinpath(*variant).resolve()
-        if path == root or root in path.parents:
-            if path.is_file():
-                return path
-    # Support one duplicated directory level without guessing from filenames.
-    for child in root.iterdir() if root.is_dir() else ():
-        if child.is_dir():
-            for variant in variants:
-                path = child.joinpath(*variant).resolve()
-                if path.is_file() and (path == child.resolve() or child.resolve() in path.parents):
-                    return path
-    # Some exports duplicate the dataset/task prefix more than once. Match the
-    # complete remaining relative suffix and reject ambiguity instead of guessing.
-    for variant in variants:
-        if not variant:
-            continue
-        matches = [p.resolve() for p in root.rglob(variant[-1]) if p.is_file()
-                   and len(p.relative_to(root).parts) >= len(variant)
-                   and list(p.relative_to(root).parts[-len(variant):]) == variant]
-        if len(matches) == 1:
-            return matches[0]
-        if len(matches) > 1:
-            raise ValueError(f"Ambiguous BRISC manifest path {value!r}: {matches[:5]}")
-    return root.joinpath(*parts)
+    """Resolve one manifest path and the two documented task-folder variants."""
+    root = Path(root).resolve()
+    relative_path = Path(str(value).replace("\\", "/"))
+    candidates = [root / relative_path]
+    swaps = {
+        "classification_task": "classification_task (1)",
+        "classification_task (1)": "classification_task",
+        "segmentation_task": "segmentation_task (1)",
+        "segmentation_task (1)": "segmentation_task",
+    }
+    # The task folder is the path prefix; retain the complete remaining suffix.
+    if relative_path.parts and relative_path.parts[0] in swaps:
+        candidates.append(root / Path(swaps[relative_path.parts[0]]).joinpath(*relative_path.parts[1:]))
+    checked = []
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        checked.append(candidate)
+        if root in candidate.parents and candidate.is_file():
+            return candidate
+    attempted = ", ".join(str(path) for path in checked)
+    raise FileNotFoundError(f"BRISC manifest path {value!r} not found; attempted: {attempted}")
 
 
 def _read_manifest(manifest: str | Path):
@@ -183,7 +157,7 @@ def validate_brisc(root: str | Path, manifest: str | Path | None = None) -> dict
     split_col = next((name for name in ("split", "subset", "partition") if rows and name in rows[0]), None)
     if not split_col:
         raise ValueError("Manifest needs an official split/subset/partition column for audit")
-    resolved, missing, errors = [], [], []
+    missing, errors = [], []
     image_records, mask_records = {}, []
     valid_labels = set()
     for number, row in enumerate(rows, start=2):
@@ -205,11 +179,25 @@ def validate_brisc(root: str | Path, manifest: str | Path | None = None) -> dict
                     errors.append(f"row {number}: empty tumor_label")
                 valid_labels.add(label)
                 image_records[str(path)] = (path, split, label, number)
-            resolved.append((path, is_mask, split))
         except Exception as exc:
             errors.append(f"row {number}: {type(exc).__name__}: {exc}")
     mismatched = []
-    overlap = []
+    overlap = set()
+    # Decode/hash each distinct on-disk image at most once, even when several
+    # manifest masks point to it. The same cache also supplies pair dimensions.
+    image_info = {}
+    mask_info = {}
+    for path, _, _, _ in image_records.values():
+        key = str(path)
+        if key in image_info:
+            continue
+        try:
+            with Image.open(path) as im:
+                pixels = np.asarray(im)
+                descriptor = f"{im.mode}:{im.size}:".encode() + pixels.tobytes()
+                image_info[key] = (im.size, hashlib.sha256(descriptor).hexdigest())
+        except Exception as exc:
+            errors.append(f"image {path}: unreadable: {exc}")
     for mask, linked, split, mask_label, number in mask_records:
         record = image_records.get(str(linked))
         if not record:
@@ -221,24 +209,24 @@ def validate_brisc(root: str | Path, manifest: str | Path | None = None) -> dict
         if mask_label and mask_label != record[2]:
             mismatched.append({"row": number, "mask": str(mask), "reason": f"tumor_label {mask_label!r} != linked image label {record[2]!r}"})
         try:
-            with Image.open(image) as im:
-                image_size = im.size
-            with Image.open(mask) as im:
-                mask_size = im.size
+            image_size = image_info[str(image)][0]
+            mask_key = str(mask)
+            if mask_key not in mask_info:
+                with Image.open(mask) as im:
+                    mask_info[mask_key] = im.size
+            mask_size = mask_info[mask_key]
             if image_size != mask_size:
                 mismatched.append({"row": number, "image": str(image), "mask": str(mask), "reason": f"dimensions {image_size} != {mask_size}"})
-            overlap.append(str(image))
+            overlap.add(str(image))
         except Exception as exc:
             errors.append(f"row {number}: unreadable image/mask: {exc}")
     hashes = {}
     duplicates = []
-    for path, is_mask, split in resolved:
-        if is_mask:
+    for path, _, _, _ in image_records.values():
+        info = image_info.get(str(path))
+        if info is None:
             continue
-        with Image.open(path) as image:
-            pixels = np.asarray(image)
-            descriptor = f"{image.mode}:{image.size}:".encode() + pixels.tobytes()
-        digest = hashlib.sha256(descriptor).hexdigest()
+        digest = info[1]
         if digest in hashes:
             duplicates.append({"sha256": digest, "first": hashes[digest], "duplicate": str(path)})
         else:
@@ -247,5 +235,5 @@ def validate_brisc(root: str | Path, manifest: str | Path | None = None) -> dict
             "mask_rows": sum(_truth(r["is_mask"]) for r in rows), "split_column": split_col,
             "split_counts": {s: sum(r[split_col].strip().casefold() == s for r in rows) for s in sorted({r[split_col].strip().casefold() for r in rows})},
             "labels": sorted(valid_labels), "missing_files": missing, "mismatched_masks": mismatched,
-            "duplicate_image_content": duplicates, "classification_segmentation_image_overlap": len(set(overlap)),
+            "duplicate_image_content": duplicates, "classification_segmentation_image_overlap": len(overlap),
             "errors": errors}
