@@ -11,7 +11,7 @@ This notebook runs the repository's existing NeuroLens architecture through the 
 3. Approve the Google Drive mount prompt.
 4. The notebook verifies the repository, dataset paths, saved split counts, and disjoint patient IDs. It then runs Conditions A, B, and C sequentially through the single `RUN_ALL_CONDITIONS = True` control.
 
-The master cell refuses to train without CUDA. Training is 50 epochs per condition (150 total) with batch size 2, accumulation 4, AdamW at 1e-4 and weight decay 1e-5, mixed precision, and seed 42. It does not add a scheduler, early stopping, gradient clipping, or architecture changes. No one-session runtime guarantee is made; the run is designed to continue across Colab disconnects. After reconnecting, run the notebook from the top again; completed epochs, conditions, validations, and test reports are detected and skipped.
+The master cell selects CUDA when available and otherwise runs on CPU. CPU mode disables mixed precision and pins no memory; the 3D model and 150 total epochs can be substantially slower on CPU. Training is 50 epochs per condition (150 total) with batch size 2, accumulation 4, AdamW at 1e-4 and weight decay 1e-5, and seed 42. The selected device and effective mixed-precision setting are recorded per condition. It does not add a scheduler, early stopping, gradient clipping, or architecture changes. No one-session runtime guarantee is made; the run is designed to continue across Colab disconnects. After reconnecting, run the notebook from the top again; completed epochs, conditions, validations, and test reports are detected and skipped.
 
 ## Required Drive data
 
