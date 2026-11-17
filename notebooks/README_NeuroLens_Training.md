@@ -6,10 +6,17 @@ This notebook preserves the repository's NeuroLens paired 2D/3D architecture and
 
 ## Colab setup and execution
 
-1. Open the primary notebook in Google Colab and mount Google Drive when prompted.
+1. Open the primary notebook in Google Colab. The setup first reuses a valid Google OAuth **user** credential only after `Drive API about.get` succeeds. It rejects service-account and unrelated runtime credentials. Colab's `authenticate_user()` is called only when no valid user credential is available.
+2. An existing `/content/drive` mount is reused after checking `os.path.ismount()`; no duplicate authorization prompt is triggered. If it is not mounted, the notebook attempts DriveFS mounting once.
 2. Select a CUDA GPU for practical execution. If CUDA is not present, the notebook states that it is using CPU; 3D training can be substantially slower.
 3. Run all cells from the top. The one master switch is `RUN_ALL_EXPERIMENTS = True` in the A/B/C orchestration cell. `ARCHITECTURE_PLAN` is a recorded experiment configuration for ResUNet3D, Swin UNETR and 3D U-Net.
 4. The notebook validates the existing manifests and patient splits, trains/resumes NeuroLens A/B/C first, then executes the enabled segmentation baselines sequentially. It selects checkpoints on validation data and evaluates each selected checkpoint on the held-out test split.
+
+### Drive authentication and recovery
+
+The notebook separates two outcomes in its diagnostics: Drive API authentication (validated with `about.get`) and DriveFS mounting at `/content/drive`. API credentials alone do not create a mounted filesystem. If API authentication fails, execution stops before dataset loading or GPU training and prints account/reconnect guidance. After the filesystem is available, the setup verifies the saved manifest files and dataset folders can be read, then writes, reads back, and removes a temporary file under `experiments/` to verify write access.
+
+When DriveFS mounting fails but the validated Drive API remains available, explicit API helpers can read an identified file and upload an explicitly staged file (including a checkpoint) into a specified Drive folder. They do not recursively mirror BraTS or silently redirect checkpoints to Colab's ephemeral disk. The current path-based NIfTI loader, atomic checkpoint recovery, and experiment registry require DriveFS; therefore the notebook stops with a DriveFS-specific diagnostic before data loading/training until the mount is restored. This avoids claiming that API credentials provide filesystem semantics. Existing BraTS content and saved manifests are reused; the notebook does not redownload the dataset.
 
 The full experiment is not expected to finish in one Colab session. NeuroLens and each segmentation baseline write independent atomic recovery checkpoints to Drive. Re-run the notebook from the top after reconnecting; compatible completed work is reused and incomplete runs resume at an epoch boundary. A changed device or configuration is intentionally treated as incompatible with an existing checkpoint. `EXECUTION_PLAN` records which optional components are enabled; `RUN_ALL_EXPERIMENTS` is the single master start control.
 
