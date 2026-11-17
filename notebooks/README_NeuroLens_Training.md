@@ -12,6 +12,10 @@ This notebook preserves the repository's NeuroLens paired 2D/3D architecture and
 3. Run all cells from the top. The one master switch is `RUN_ALL_EXPERIMENTS = True` in the A/B/C orchestration cell. `ARCHITECTURE_PLAN` is a recorded experiment configuration for ResUNet3D, Swin UNETR and 3D U-Net.
 4. The notebook validates the existing manifests and patient splits, trains/resumes NeuroLens A/B/C first, then executes the enabled segmentation baselines sequentially. It selects checkpoints on validation data and evaluates each selected checkpoint on the held-out test split.
 
+### CPU-to-TPU continuation
+
+The A/B/C trainer detects a TPU through PyTorch/XLA before considering CUDA. The TPU continuation uses XLA device stepping and bfloat16 autocast without CUDA GradScaler. `ALLOW_CPU_TO_TPU_RESUME` is an explicit migration setting: it accepts only the saved CPU run transitioning to XLA with mixed precision enabled and unchanged experiment settings. The original CPU config files are copied to `config.pre_tpu_cpu.json` and `runtime_config.pre_tpu_cpu.yaml` before the active config is updated; the checkpoint epoch, model, AdamW state, history, and patient splits are resumed from the existing `condition_A/B/C` directories. Optional architecture and postprocessing phases are left untouched for this TPU continuation. Confirm setup output says `TPU runtime: True` and `selected device: xla` before continuing. If it says CUDA, the runtime/notebook cells are stale or the selected runtime is not TPU; restart the runtime and run the updated notebook from the beginning.
+
 ### Drive authentication and recovery
 
 The notebook separates two outcomes in its diagnostics: Drive API authentication (validated with `about.get`) and DriveFS mounting at `/content/drive`. API credentials alone do not create a mounted filesystem. If API authentication fails, execution stops before dataset loading or GPU training and prints account/reconnect guidance. After the filesystem is available, the setup verifies the saved manifest files and dataset folders can be read, then writes, reads back, and removes a temporary file under `experiments/` to verify write access.

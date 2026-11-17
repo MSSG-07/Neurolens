@@ -12,7 +12,21 @@ from neurolens.utils.metrics import classification_metrics
 class Trainer:
     def __init__(self, model, config):
         self.model, self.config = model, config
-        self.device=torch.device(config.device if config.device=="cpu" or torch.cuda.is_available() else "cpu")
+        self.device=torch.device(config.device)
+        if self.device.type == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError("CUDA was requested but is unavailable")
+        self.xla_model=None
+        if self.device.type == "xla":
+            try:
+                import torch_xla.runtime as xr
+                import torch_xla.core.xla_model as xm
+            except ImportError as exc:
+                raise RuntimeError("XLA was requested but PyTorch/XLA is unavailable in this runtime") from exc
+            if xr.device_type() != "TPU":
+                raise RuntimeError(f"XLA device was requested, but PyTorch/XLA reports {xr.device_type()!r}, not TPU")
+            self.xla_model=xm
+        elif self.device.type not in {"cpu", "cuda"}:
+            raise ValueError(f"Unsupported training device: {self.device}")
         self.model.to(self.device)
         self.optimizer=torch.optim.AdamW(model.parameters(),lr=config.learning_rate,weight_decay=config.weight_decay)
         self.scaler=torch.amp.GradScaler("cuda",enabled=config.mixed_precision and self.device.type=="cuda")
@@ -45,12 +59,16 @@ class Trainer:
             targets={"class_label":batch["class_label"].to(self.device),"segmentation":batch["segmentation"].to(self.device)}
             if training and self.config.alignment_condition in ("B","C") and image2d.shape[0]<2:
                 raise ValueError("Aligned training requires batch_size >= 2 for valid in-batch negatives")
-            with torch.set_grad_enabled(training), torch.autocast(device_type=self.device.type,enabled=self.scaler.is_enabled()):
+            if self.device.type == "xla":
+                autocast_context=torch.autocast(device_type="xla",dtype=torch.bfloat16,enabled=self.config.mixed_precision)
+            else:
+                autocast_context=torch.autocast(device_type=self.device.type,enabled=self.scaler.is_enabled())
+            with torch.set_grad_enabled(training), autocast_context:
                 output=self.model(image2d,image3d); loss,parts=self.loss(output,targets)
                 scaled=loss/self.config.accumulation_steps
             batch_size = int(image2d.shape[0])
             if collect_metrics:
-                probabilities = output["classification_logits"].softmax(1).detach().cpu().numpy()
+                probabilities = output["classification_logits"].softmax(1).float().detach().cpu().numpy()
                 metric_truth.extend(targets["class_label"].detach().cpu().tolist())
                 metric_prediction.extend(probabilities.argmax(1).tolist())
                 segmentation = output["segmentation_logits"].argmax(1).detach().cpu().numpy()
@@ -69,7 +87,11 @@ class Trainer:
             if training:
                 self.scaler.scale(scaled).backward()
                 if (i+1)%self.config.accumulation_steps==0 or (i+1)==len(loader):
-                    self.scaler.step(self.optimizer); self.scaler.update(); self.optimizer.zero_grad(set_to_none=True)
+                    if self.device.type == "xla":
+                        self.xla_model.optimizer_step(self.optimizer)
+                    else:
+                        self.scaler.step(self.optimizer); self.scaler.update()
+                    self.optimizer.zero_grad(set_to_none=True)
             for key,value in parts.items(): totals[key]=totals.get(key,0.)+float(value.detach())*batch_size
             n+=batch_size
         result = {k:v/max(1,n) for k,v in totals.items()}

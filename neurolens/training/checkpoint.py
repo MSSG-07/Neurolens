@@ -10,7 +10,13 @@ def save_checkpoint(path, model, optimizer, scaler, epoch, config, extra_state=N
                   "epoch":epoch,"config":config,"torch_rng":torch.get_rng_state()}
     if extra_state is not None:
         checkpoint["extra_state"] = extra_state
-    torch.save(checkpoint,tmp)
+    if any(parameter.device.type == "xla" for parameter in model.parameters()):
+        # XLA tensors should be moved to CPU by PyTorch/XLA before serialization.
+        import torch_xla.core.xla_model as xm
+        xm.wait_device_ops()
+        xm.save(checkpoint,tmp)
+    else:
+        torch.save(checkpoint,tmp)
     tmp.replace(path)
 
 
